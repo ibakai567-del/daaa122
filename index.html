@@ -1,0 +1,1563 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <title>HDD Factory Digital Twin</title>
+
+  <!-- A-Frame CDN -->
+  <script src="https://aframe.io/releases/1.7.0/aframe.min.js"></script>
+
+  <style>
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #667078;
+      font-family: Arial, sans-serif;
+    }
+
+    #info {
+      position: fixed;
+      top: 20px;
+      left: 20px;
+      width: 280px;
+      padding: 14px 16px;
+      box-sizing: border-box;
+      background: rgba(10, 20, 30, 0.9);
+      color: white;
+      border-left: 4px solid #00d9ff;
+      border-radius: 6px;
+      z-index: 20;
+      display: none;
+      pointer-events: none;
+    }
+
+    #info h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+    }
+
+    #info p {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    #help {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.65);
+      color: white;
+      padding: 9px 15px;
+      border-radius: 5px;
+      font-size: 12px;
+      z-index: 20;
+      pointer-events: none;
+    }
+  </style>
+
+  <script>
+    /*
+     * ============================================================
+     * HDD FACTORY DIGITAL TWIN
+     * ============================================================
+     *
+     * Production:
+     *
+     * M01 → Conveyor 1 → M02 → Conveyor 2 → M03
+     *
+     * Controls:
+     *   Mouse      = Look around
+     *   WASD       = Move
+     *   Click      = Select machine
+     *   VR button  = Enter WebXR when supported
+     *
+     * The scene uses lightweight A-Frame primitives only.
+     */
+
+
+    /* ------------------------------------------------------------
+       Machine click component
+       ------------------------------------------------------------ */
+
+    AFRAME.registerComponent("machine-click", {
+
+      schema: {
+        title: {
+          type: "string",
+          default: "Machine"
+        },
+
+        description: {
+          type: "string",
+          default: ""
+        }
+      },
+
+      init: function () {
+
+        this.el.addEventListener("click", () => {
+
+          const panel = document.getElementById("info");
+
+          panel.innerHTML =
+            "<h2>" + this.data.title + "</h2>" +
+            "<p>" + this.data.description + "</p>";
+
+          panel.style.display = "block";
+
+          clearTimeout(this.timer);
+
+          this.timer = setTimeout(() => {
+            panel.style.display = "none";
+          }, 5000);
+
+        });
+
+      }
+
+    });
+
+
+    /* ------------------------------------------------------------
+       Simple WASD movement
+       ------------------------------------------------------------ */
+
+    AFRAME.registerComponent("simple-wasd", {
+
+      schema: {
+        speed: {
+          type: "number",
+          default: 3
+        }
+      },
+
+      init: function () {
+
+        this.keys = {};
+
+        window.addEventListener("keydown", (event) => {
+          this.keys[event.key.toLowerCase()] = true;
+        });
+
+        window.addEventListener("keyup", (event) => {
+          this.keys[event.key.toLowerCase()] = false;
+        });
+
+      },
+
+      tick: function (time, delta) {
+
+        const dt = Math.min(delta, 50) / 1000;
+
+        const movement = new THREE.Vector3();
+
+        if (this.keys["w"]) {
+          movement.z -= 1;
+        }
+
+        if (this.keys["s"]) {
+          movement.z += 1;
+        }
+
+        if (this.keys["a"]) {
+          movement.x -= 1;
+        }
+
+        if (this.keys["d"]) {
+          movement.x += 1;
+        }
+
+        if (movement.lengthSq() > 0) {
+
+          movement.normalize();
+
+          movement.multiplyScalar(
+            this.data.speed * dt
+          );
+
+          this.el.object3D.position.x += movement.x;
+          this.el.object3D.position.z += movement.z;
+
+        }
+
+        /* Keep the player inside the factory. */
+
+        this.el.object3D.position.x =
+          Math.max(-13, Math.min(13, this.el.object3D.position.x));
+
+        this.el.object3D.position.z =
+          Math.max(-6, Math.min(6, this.el.object3D.position.z));
+
+      }
+
+    });
+
+
+    /* ------------------------------------------------------------
+       Conveyor carrier animation
+       ------------------------------------------------------------ */
+
+    AFRAME.registerComponent("carrier", {
+
+      schema: {
+
+        start: {
+          type: "number"
+        },
+
+        end: {
+          type: "number"
+        },
+
+        speed: {
+          type: "number",
+          default: 0.7
+        }
+
+      },
+
+      init: function () {
+
+        this.x = this.data.start;
+
+      },
+
+      tick: function (time, delta) {
+
+        const dt = Math.min(delta, 50) / 1000;
+
+        this.x += this.data.speed * dt;
+
+        if (this.x > this.data.end) {
+          this.x = this.data.start;
+        }
+
+        this.el.object3D.position.x = this.x;
+
+      }
+
+    });
+
+
+    /* ------------------------------------------------------------
+       Robot joint animation
+       ------------------------------------------------------------ */
+
+    AFRAME.registerComponent("robot-motion", {
+
+      schema: {
+
+        amplitude: {
+          type: "number",
+          default: 25
+        },
+
+        speed: {
+          type: "number",
+          default: 1
+        }
+
+      },
+
+      init: function () {
+
+        this.clock = Math.random() * 10;
+
+      },
+
+      tick: function (time, delta) {
+
+        this.clock += delta / 1000;
+
+        const wave =
+          Math.sin(this.clock * this.data.speed);
+
+        const wave2 =
+          Math.sin(this.clock * this.data.speed + 1.2);
+
+        const children = this.el.children;
+
+        if (children.length >= 3) {
+
+          const shoulder = children[0];
+          const elbow = children[1];
+          const wrist = children[2];
+
+          shoulder.object3D.rotation.z =
+            THREE.MathUtils.degToRad(
+              wave * this.data.amplitude
+            );
+
+          elbow.object3D.rotation.z =
+            THREE.MathUtils.degToRad(
+              wave2 * this.data.amplitude * 0.7
+            );
+
+          wrist.object3D.rotation.z =
+            THREE.MathUtils.degToRad(
+              wave * this.data.amplitude * 0.35
+            );
+
+        }
+
+      }
+
+    });
+
+
+    /* ------------------------------------------------------------
+       Rotating spindle
+       ------------------------------------------------------------ */
+
+    AFRAME.registerComponent("spindle-spin", {
+
+      tick: function (time, delta) {
+
+        this.el.object3D.rotation.y +=
+          delta * 0.003;
+
+      }
+
+    });
+
+
+    /* ------------------------------------------------------------
+       Floor grid
+       ------------------------------------------------------------ */
+
+    AFRAME.registerComponent("floor-grid", {
+
+      init: function () {
+
+        const root = this.el;
+
+        const gridColor = "#50565b";
+
+        /* Lines along X */
+
+        for (let y = -7; y <= 7; y++) {
+
+          const line = document.createElement("a-box");
+
+          line.setAttribute(
+            "position",
+            `0 0.006 ${y}`
+          );
+
+          line.setAttribute("width", "30");
+          line.setAttribute("height", "0.012");
+          line.setAttribute("depth", "0.012");
+
+          line.setAttribute(
+            "material",
+            `color:${gridColor}`
+          );
+
+          root.appendChild(line);
+
+        }
+
+        /* Lines along Z */
+
+        for (let x = -15; x <= 15; x++) {
+
+          const line = document.createElement("a-box");
+
+          line.setAttribute(
+            "position",
+            `${x} 0.007 0`
+          );
+
+          line.setAttribute("width", "0.012");
+          line.setAttribute("height", "0.012");
+          line.setAttribute("depth", "14");
+
+          line.setAttribute(
+            "material",
+            `color:${gridColor}`
+          );
+
+          root.appendChild(line);
+
+        }
+
+      }
+
+    });
+
+  </script>
+</head>
+
+
+<body>
+
+  <!-- Machine information panel -->
+
+  <div id="info"></div>
+
+  <!-- User instructions -->
+
+  <div id="help">
+    Mouse = Look &nbsp; | &nbsp; WASD = Move &nbsp; | &nbsp; Click = Machine
+  </div>
+
+
+  <a-scene
+    background="color:#9ba6af"
+    fog="type:linear; color:#9ba6af; near:20; far:45"
+    renderer="antialias:true; colorManagement:true"
+    vr-mode-ui="enabled:true"
+  >
+
+
+    <!-- ========================================================
+         LIGHTING
+         ======================================================== -->
+
+    <a-entity
+      light="
+        type:ambient;
+        color:#d8e2e8;
+        intensity:0.75
+      "
+    ></a-entity>
+
+    <a-entity
+      light="
+        type:directional;
+        color:#ffffff;
+        intensity:0.9
+      "
+      position="-5 10 8"
+    ></a-entity>
+
+
+    <!-- ========================================================
+         CAMERA / PLAYER
+         ======================================================== -->
+
+    <a-entity
+      id="player"
+      position="0 1.7 -6"
+      simple-wasd="speed:3"
+    >
+
+      <a-camera
+        look-controls="enabled:true"
+        wasd-controls="enabled:false"
+      >
+
+        <!--
+          Cursor allows the user to click the machines.
+        -->
+
+        <a-cursor
+          raycaster="objects:.clickable"
+          color="#00d9ff"
+          fuse="false"
+        ></a-cursor>
+
+      </a-camera>
+
+    </a-entity>
+
+
+    <!-- ========================================================
+         FLOOR
+         ======================================================== -->
+
+    <a-box
+      position="0 -0.06 0"
+      width="30"
+      height="0.12"
+      depth="14"
+      material="
+        color:#686e73;
+        roughness:0.9
+      "
+    ></a-box>
+
+    <a-entity floor-grid></a-entity>
+
+
+    <!-- ========================================================
+         FACTORY WALLS
+         ======================================================== -->
+
+    <!-- Rear wall -->
+
+    <a-box
+      position="0 3 7"
+      width="30"
+      height="6"
+      depth="0.2"
+      material="color:#536b7c"
+    ></a-box>
+
+
+    <!-- Left wall -->
+
+    <a-box
+      position="-15 3 0"
+      width="0.2"
+      height="6"
+      depth="14"
+      material="color:#536b7c"
+    ></a-box>
+
+
+    <!-- Right wall -->
+
+    <a-box
+      position="15 3 0"
+      width="0.2"
+      height="6"
+      depth="14"
+      material="color:#536b7c"
+    ></a-box>
+
+
+    <!-- Ceiling -->
+
+    <a-box
+      position="0 6 0"
+      width="30"
+      height="0.1"
+      depth="14"
+      material="color:#536b7c"
+    ></a-box>
+
+
+    <!-- ========================================================
+         CEILING LIGHTS
+         ======================================================== -->
+
+    <a-box
+      position="-10 5.8 3"
+      width="2"
+      height="0.06"
+      depth="0.5"
+      material="
+        color:#ffffff;
+        emissive:#ffffff;
+        emissiveIntensity:0.7
+      "
+    ></a-box>
+
+    <a-box
+      position="0 5.8 3"
+      width="2"
+      height="0.06"
+      depth="0.5"
+      material="
+        color:#ffffff;
+        emissive:#ffffff;
+        emissiveIntensity:0.7
+      "
+    ></a-box>
+
+    <a-box
+      position="10 5.8 3"
+      width="2"
+      height="0.06"
+      depth="0.5"
+      material="
+        color:#ffffff;
+        emissive:#ffffff;
+        emissiveIntensity:0.7
+      "
+    ></a-box>
+
+    <a-box
+      position="-10 5.8 -3"
+      width="2"
+      height="0.06"
+      depth="0.5"
+      material="
+        color:#ffffff;
+        emissive:#ffffff;
+        emissiveIntensity:0.7
+      "
+    ></a-box>
+
+    <a-box
+      position="0 5.8 -3"
+      width="2"
+      height="0.06"
+      depth="0.5"
+      material="
+        color:#ffffff;
+        emissive:#ffffff;
+        emissiveIntensity:0.7
+      "
+    ></a-box>
+
+    <a-box
+      position="10 5.8 -3"
+      width="2"
+      height="0.06"
+      depth="0.5"
+      material="
+        color:#ffffff;
+        emissive:#ffffff;
+        emissiveIntensity:0.7
+      "
+    ></a-box>
+
+
+    <!-- ========================================================
+         WALKING PATH
+         ======================================================== -->
+
+    <a-box
+      position="0 0.02 -2.5"
+      width="27"
+      height="0.04"
+      depth="1.8"
+      material="color:#4e7778"
+    ></a-box>
+
+    <a-box
+      position="0 0.05 -3.4"
+      width="27"
+      height="0.03"
+      depth="0.06"
+      material="color:#f0d84a"
+    ></a-box>
+
+    <a-box
+      position="0 0.05 -1.6"
+      width="27"
+      height="0.03"
+      depth="0.06"
+      material="color:#f0d84a"
+    ></a-box>
+
+
+    <!-- ========================================================
+         CYAN FLOW ARROWS
+         ======================================================== -->
+
+    <a-box
+      position="-4.5 0.06 -0.3"
+      width="1.5"
+      height="0.04"
+      depth="0.12"
+      material="
+        color:#00d9ff;
+        emissive:#00d9ff;
+        emissiveIntensity:0.6
+      "
+    ></a-box>
+
+    <a-cone
+      position="-3.7 0.06 -0.3"
+      radius-bottom="0.3"
+      radius-top="0"
+      height="0.45"
+      rotation="0 0 -90"
+      material="
+        color:#00d9ff;
+        emissive:#00d9ff;
+        emissiveIntensity:0.6
+      "
+    ></a-cone>
+
+
+    <a-box
+      position="4.5 0.06 -0.3"
+      width="1.5"
+      height="0.04"
+      depth="0.12"
+      material="
+        color:#00d9ff;
+        emissive:#00d9ff;
+        emissiveIntensity:0.6
+      "
+    ></a-box>
+
+    <a-cone
+      position="5.3 0.06 -0.3"
+      radius-bottom="0.3"
+      radius-top="0"
+      height="0.45"
+      rotation="0 0 -90"
+      material="
+        color:#00d9ff;
+        emissive:#00d9ff;
+        emissiveIntensity:0.6
+      "
+    ></a-cone>
+
+
+    <!-- ========================================================
+         M01 PRECISION WEIGHING
+         ======================================================== -->
+
+    <a-entity
+      id="M01"
+      class="clickable"
+      machine-click="
+        title:M01 - Precision Weighing;
+        description:Small blue robot picks an HDD disk, places it on the circular precision scale, waits for measurement, then removes it.
+      "
+    >
+
+      <!-- Body -->
+
+      <a-box
+        position="-9 1.4 2"
+        width="4.5"
+        height="2.8"
+        depth="3.5"
+        material="color:#eeeeee"
+      ></a-box>
+
+
+      <!-- Blue lower panel -->
+
+      <a-box
+        position="-9 0.8 0.2"
+        width="4.2"
+        height="0.9"
+        depth="0.12"
+        material="color:#1268b3"
+      ></a-box>
+
+
+      <!-- Scale load cell -->
+
+      <a-cylinder
+        position="-8.5 0.98 1.6"
+        radius="0.7"
+        height="0.16"
+        segments="16"
+        material="color:#4e555a"
+      ></a-cylinder>
+
+
+      <!-- Scale platform -->
+
+      <a-cylinder
+        position="-8.5 1.08 1.6"
+        radius="0.55"
+        height="0.10"
+        segments="20"
+        material="color:#d7dcdf"
+      ></a-cylinder>
+
+
+      <!-- HDD -->
+
+      <a-cylinder
+        position="-8.5 1.17 1.6"
+        radius="0.42"
+        height="0.07"
+        segments="20"
+        material="color:#252b2e"
+      ></a-cylinder>
+
+
+      <!-- Robot -->
+
+      <a-entity
+        id="robot-m01"
+        position="-10 0 2.5"
+        robot-motion="amplitude:28; speed:1.2"
+      >
+
+        <!-- Base -->
+
+        <a-cylinder
+          position="0 0.75 0"
+          radius="0.35"
+          height="0.7"
+          segments="12"
+          material="color:#126fc0"
+        ></a-cylinder>
+
+
+        <!-- Shoulder -->
+
+        <a-sphere
+          position="0 1.25 0"
+          radius="0.25"
+          material="color:#1987df"
+        ></a-sphere>
+
+
+        <!-- Upper arm -->
+
+        <a-box
+          position="0.25 1.65 0"
+          width="0.25"
+          height="0.9"
+          depth="0.25"
+          rotation="0 0 -35"
+          material="color:#1987df"
+        ></a-box>
+
+
+        <!-- Elbow -->
+
+        <a-sphere
+          position="0.5 2.05 0"
+          radius="0.18"
+          material="color:#0d5da3"
+        ></a-sphere>
+
+
+        <!-- Forearm -->
+
+        <a-box
+          position="0.55 2.3 0"
+          width="0.22"
+          height="0.75"
+          depth="0.22"
+          rotation="0 0 40"
+          material="color:#1987df"
+        ></a-box>
+
+
+        <!-- Wrist -->
+
+        <a-sphere
+          position="0.7 2.65 0"
+          radius="0.13"
+          material="color:#0d5da3"
+        ></a-sphere>
+
+
+        <!-- Gripper -->
+
+        <a-box
+          position="0.7 2.85 0"
+          width="0.12"
+          height="0.3"
+          depth="0.12"
+          material="color:#20272b"
+        ></a-box>
+
+      </a-entity>
+
+
+      <!-- Safety zone -->
+
+      <a-box
+        position="-9 0.025 2"
+        width="6"
+        height="0.03"
+        depth="5"
+        material="
+          color:#e6c62f;
+          opacity:0.18;
+          transparent:true
+        "
+      ></a-box>
+
+
+      <!-- Label -->
+
+      <a-text
+        value="M01\nPRECISION WEIGHING"
+        position="-9 3.3 0.1"
+        align="center"
+        width="4"
+        color="#ffffff"
+      ></a-text>
+
+    </a-entity>
+
+
+    <!-- ========================================================
+         CONVEYOR 1
+         ======================================================== -->
+
+    <a-entity>
+
+      <!-- Belt -->
+
+      <a-box
+        position="-4.5 0.72 0.8"
+        width="4"
+        height="0.12"
+        depth="0.65"
+        material="color:#20262a"
+      ></a-box>
+
+
+      <!-- Rails -->
+
+      <a-box
+        position="-4.5 0.9 0.43"
+        width="4"
+        height="0.12"
+        depth="0.08"
+        material="color:#707b82"
+      ></a-box>
+
+      <a-box
+        position="-4.5 0.9 1.17"
+        width="4"
+        height="0.12"
+        depth="0.08"
+        material="color:#707b82"
+      ></a-box>
+
+
+      <!-- Legs -->
+
+      <a-box
+        position="-6 0.38 0.8"
+        width="0.12"
+        height="0.75"
+        depth="0.12"
+        material="color:#606a70"
+      ></a-box>
+
+      <a-box
+        position="-4.5 0.38 0.8"
+        width="0.12"
+        height="0.75"
+        depth="0.12"
+        material="color:#606a70"
+      ></a-box>
+
+      <a-box
+        position="-3 0.38 0.8"
+        width="0.12"
+        height="0.75"
+        depth="0.12"
+        material="color:#606a70"
+      ></a-box>
+
+
+      <!-- Three carriers -->
+
+      <a-entity
+        carrier="start:-6.2; end:-2.8; speed:0.7"
+      >
+        <a-box
+          width="0.55"
+          height="0.12"
+          depth="0.45"
+          material="color:#30383d"
+        ></a-box>
+
+        <a-cylinder
+          position="0 0.09 0"
+          radius="0.23"
+          height="0.06"
+          segments="16"
+          material="color:#151a1d"
+        ></a-cylinder>
+      </a-entity>
+
+
+      <a-entity
+        carrier="start:-6.2; end:-2.8; speed:0.7"
+        position="-1.1 0 0"
+      >
+        <a-box
+          width="0.55"
+          height="0.12"
+          depth="0.45"
+          material="color:#30383d"
+        ></a-box>
+
+        <a-cylinder
+          position="0 0.09 0"
+          radius="0.23"
+          height="0.06"
+          segments="16"
+          material="color:#151a1d"
+        ></a-cylinder>
+      </a-entity>
+
+
+      <a-entity
+        carrier="start:-6.2; end:-2.8; speed:0.7"
+        position="-2.2 0 0"
+      >
+        <a-box
+          width="0.55"
+          height="0.12"
+          depth="0.45"
+          material="color:#30383d"
+        ></a-box>
+
+        <a-cylinder
+          position="0 0.09 0"
+          radius="0.23"
+          height="0.06"
+          segments="16"
+          material="color:#151a1d"
+        ></a-cylinder>
+      </a-entity>
+
+    </a-entity>
+
+
+    <!-- ========================================================
+         M02 ROBOTIC ASSEMBLY
+         ======================================================== -->
+
+    <a-entity
+      id="M02"
+      class="clickable"
+      machine-click="
+        title:M02 - Robotic Assembly;
+        description:Large orange three-joint robot picks a component, aligns it above the HDD fixture, places it, releases it, and returns home.
+      "
+    >
+
+      <!-- Main body -->
+
+      <a-box
+        position="0 0.9 2.2"
+        width="7"
+        height="1.8"
+        depth="4.8"
+        material="color:#ed7418"
+      ></a-box>
+
+
+      <!-- Orange safety frame -->
+
+      <a-box
+        position="-3.25 2.7 2.2"
+        width="0.15"
+        height="3.6"
+        depth="0.15"
+        material="color:#f27b1d"
+      ></a-box>
+
+      <a-box
+        position="3.25 2.7 2.2"
+        width="0.15"
+        height="3.6"
+        depth="0.15"
+        material="color:#f27b1d"
+      ></a-box>
+
+      <a-box
+        position="0 4.45 2.2"
+        width="6.5"
+        height="0.15"
+        depth="0.15"
+        material="color:#f27b1d"
+      ></a-box>
+
+
+      <!-- Transparent front panel -->
+
+      <a-box
+        position="0 2.6 4.55"
+        width="6.4"
+        height="3.5"
+        depth="0.08"
+        material="
+          color:#78a9bb;
+          opacity:0.18;
+          transparent:true
+        "
+      ></a-box>
+
+
+      <!-- HDD fixture -->
+
+      <a-box
+        position="0 1.75 1"
+        width="2.2"
+        height="0.25"
+        depth="1.4"
+        material="color:#3e464b"
+      ></a-box>
+
+
+      <!-- Component -->
+
+      <a-cylinder
+        position="-2 1.15 1"
+        radius="0.18"
+        height="0.08"
+        segments="12"
+        material="color:#adb6bb"
+      ></a-cylinder>
+
+
+      <!-- Robot -->
+
+      <a-entity
+        id="robot-m02"
+        position="0 0 2.5"
+        robot-motion="amplitude:24; speed:0.8"
+      >
+
+        <!-- Base -->
+
+        <a-cylinder
+          position="0 1 0"
+          radius="0.55"
+          height="0.8"
+          segments="16"
+          material="color:#353b40"
+        ></a-cylinder>
+
+
+        <!-- Shoulder -->
+
+        <a-sphere
+          position="0 1.6 0"
+          radius="0.35"
+          material="color:#ef7418"
+        ></a-sphere>
+
+
+        <!-- Upper arm -->
+
+        <a-box
+          position="0.45 2.3 0"
+          width="0.4"
+          height="1.5"
+          depth="0.4"
+          rotation="0 0 -30"
+          material="color:#f27b1d"
+        ></a-box>
+
+
+        <!-- Elbow -->
+
+        <a-sphere
+          position="0.9 2.9 0"
+          radius="0.3"
+          material="color:#c95710"
+        ></a-sphere>
+
+
+        <!-- Forearm -->
+
+        <a-box
+          position="0.65 3.3 0"
+          width="0.35"
+          height="1.2"
+          depth="0.35"
+          rotation="0 0 45"
+          material="color:#ef7418"
+        ></a-box>
+
+
+        <!-- Wrist -->
+
+        <a-cylinder
+          position="0.3 3.7 0"
+          radius="0.18"
+          height="0.35"
+          rotation="0 0 90"
+          segments="12"
+          material="color:#343b40"
+        ></a-cylinder>
+
+
+        <!-- Gripper -->
+
+        <a-box
+          position="0.1 3.9 0"
+          width="0.15"
+          height="0.35"
+          depth="0.35"
+          material="color:#22292e"
+        ></a-box>
+
+      </a-entity>
+
+
+      <!-- Safety zone -->
+
+      <a-box
+        position="0 0.025 2"
+        width="8"
+        height="0.03"
+        depth="6"
+        material="
+          color:#e6c62f;
+          opacity:0.18;
+          transparent:true
+        "
+      ></a-box>
+
+
+      <!-- Label -->
+
+      <a-text
+        value="M02\nROBOTIC ASSEMBLY"
+        position="0 4.8 0.1"
+        align="center"
+        width="4"
+        color="#ffffff"
+      ></a-text>
+
+    </a-entity>
+
+
+    <!-- ========================================================
+         CONVEYOR 2
+         ======================================================== -->
+
+    <a-entity>
+
+      <!-- Belt -->
+
+      <a-box
+        position="4.5 0.72 0.8"
+        width="4"
+        height="0.12"
+        depth="0.65"
+        material="color:#20262a"
+      ></a-box>
+
+
+      <!-- Rails -->
+
+      <a-box
+        position="4.5 0.9 0.43"
+        width="4"
+        height="0.12"
+        depth="0.08"
+        material="color:#707b82"
+      ></a-box>
+
+      <a-box
+        position="4.5 0.9 1.17"
+        width="4"
+        height="0.12"
+        depth="0.08"
+        material="color:#707b82"
+      ></a-box>
+
+
+      <!-- Legs -->
+
+      <a-box
+        position="3 0.38 0.8"
+        width="0.12"
+        height="0.75"
+        depth="0.12"
+        material="color:#606a70"
+      ></a-box>
+
+      <a-box
+        position="4.5 0.38 0.8"
+        width="0.12"
+        height="0.75"
+        depth="0.12"
+        material="color:#606a70"
+      ></a-box>
+
+      <a-box
+        position="6 0.38 0.8"
+        width="0.12"
+        height="0.75"
+        depth="0.12"
+        material="color:#606a70"
+      ></a-box>
+
+
+      <!-- Three carriers -->
+
+      <a-entity
+        carrier="start:2.8; end:6.2; speed:0.7"
+      >
+        <a-box
+          width="0.55"
+          height="0.12"
+          depth="0.45"
+          material="color:#30383d"
+        ></a-box>
+
+        <a-cylinder
+          position="0 0.09 0"
+          radius="0.23"
+          height="0.06"
+          segments="16"
+          material="color:#151a1d"
+        ></a-cylinder>
+      </a-entity>
+
+
+      <a-entity
+        carrier="start:2.8; end:6.2; speed:0.7"
+        position="-1.1 0 0"
+      >
+        <a-box
+          width="0.55"
+          height="0.12"
+          depth="0.45"
+          material="color:#30383d"
+        ></a-box>
+
+        <a-cylinder
+          position="0 0.09 0"
+          radius="0.23"
+          height="0.06"
+          segments="16"
+          material="color:#151a1d"
+        ></a-cylinder>
+      </a-entity>
+
+
+      <a-entity
+        carrier="start:2.8; end:6.2; speed:0.7"
+        position="-2.2 0 0"
+      >
+        <a-box
+          width="0.55"
+          height="0.12"
+          depth="0.45"
+          material="color:#30383d"
+        ></a-box>
+
+        <a-cylinder
+          position="0 0.09 0"
+          radius="0.23"
+          height="0.06"
+          segments="16"
+          material="color:#151a1d"
+        ></a-cylinder>
+      </a-entity>
+
+    </a-entity>
+
+
+    <!-- ========================================================
+         M03 FUNCTIONAL TEST
+         ======================================================== -->
+
+    <a-entity
+      id="M03"
+      class="clickable"
+      machine-click="
+        title:M03 - Functional Test;
+        description:Dark-blue enclosed test cabinet. A compact robot loads the HDD into the visible spindle chamber, waits for the test, then unloads it.
+      "
+    >
+
+      <!-- Cabinet -->
+
+      <a-box
+        position="9 1.8 2.2"
+        width="5.5"
+        height="3.6"
+        depth="4"
+        material="color:#123d69"
+      ></a-box>
+
+
+      <!-- Test chamber -->
+
+      <a-cylinder
+        position="9 1.7 2"
+        radius="0.85"
+        height="0.4"
+        segments="20"
+        rotation="90 0 0"
+        material="color:#53636c"
+      ></a-cylinder>
+
+
+      <!-- Spindle -->
+
+      <a-cylinder
+        position="9 1.92 2"
+        radius="0.58"
+        height="0.2"
+        segments="20"
+        rotation="90 0 0"
+        spindle-spin
+        material="
+          color:#687b85;
+          emissive:#008ca8;
+          emissiveIntensity:0.3
+        "
+      ></a-cylinder>
+
+
+      <!-- HDD -->
+
+      <a-cylinder
+        position="9 2.05 2"
+        radius="0.42"
+        height="0.08"
+        segments="20"
+        rotation="90 0 0"
+        material="color:#20272b"
+      ></a-cylinder>
+
+
+      <!-- Control display -->
+
+      <a-box
+        position="9 2.7 0.15"
+        width="1.4"
+        height="0.75"
+        depth="0.1"
+        material="color:#18242b"
+      ></a-box>
+
+      <a-box
+        position="9 2.7 0.09"
+        width="1.1"
+        height="0.5"
+        depth="0.02"
+        material="
+          color:#063541;
+          emissive:#00758c;
+          emissiveIntensity:0.5
+        "
+      ></a-box>
+
+      <a-text
+        value="TEST"
+        position="9 2.7 0.05"
+        align="center"
+        width="1.2"
+        color="#00d9ff"
+      ></a-text>
+
+
+      <!-- Robot -->
+
+      <a-entity
+        id="robot-m03"
+        position="10 0 2.7"
+        robot-motion="amplitude:30; speed:1"
+      >
+
+        <!-- Base -->
+
+        <a-cylinder
+          position="0 0.75 0"
+          radius="0.4"
+          height="0.7"
+          segments="12"
+          material="color:#53616b"
+        ></a-cylinder>
+
+
+        <!-- Shoulder -->
+
+        <a-sphere
+          position="0 1.25 0"
+          radius="0.25"
+          material="color:#75909d"
+        ></a-sphere>
+
+
+        <!-- Upper arm -->
+
+        <a-box
+          position="-0.2 1.65 0"
+          width="0.25"
+          height="0.9"
+          depth="0.25"
+          rotation="0 0 30"
+          material="color:#75909d"
+        ></a-box>
+
+
+        <!-- Elbow -->
+
+        <a-sphere
+          position="-0.4 2.05 0"
+          radius="0.18"
+          material="color:#42545e"
+        ></a-sphere>
+
+
+        <!-- Forearm -->
+
+        <a-box
+          position="-0.55 2.35 0"
+          width="0.22"
+          height="0.7"
+          depth="0.22"
+          rotation="0 0 -35"
+          material="color:#75909d"
+        ></a-box>
+
+
+        <!-- Wrist -->
+
+        <a-sphere
+          position="-0.7 2.65 0"
+          radius="0.13"
+          material="color:#42545e"
+        ></a-sphere>
+
+
+        <!-- Gripper -->
+
+        <a-box
+          position="-0.72 2.82 0"
+          width="0.12"
+          height="0.3"
+          depth="0.12"
+          material="color:#20282d"
+        ></a-box>
+
+      </a-entity>
+
+
+      <!-- Safety zone -->
+
+      <a-box
+        position="9 0.025 2"
+        width="7"
+        height="0.03"
+        depth="5"
+        material="
+          color:#e6c62f;
+          opacity:0.18;
+          transparent:true
+        "
+      ></a-box>
+
+
+      <!-- Label -->
+
+      <a-text
+        value="M03\nFUNCTIONAL TEST"
+        position="9 4.2 0.1"
+        align="center"
+        width="4"
+        color="#ffffff"
+      ></a-text>
+
+    </a-entity>
+
+
+    <!-- ========================================================
+         SIMPLE FLOW LABEL
+         ======================================================== -->
+
+    <a-text
+      value="PRODUCTION FLOW  →  →"
+      position="0 0.08 -0.3"
+      rotation="-90 0 0"
+      align="center"
+      width="5"
+      color="#00d9ff"
+    ></a-text>
+
+
+  </a-scene>
+
+</body>
+</html>
